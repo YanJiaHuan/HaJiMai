@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>HaJiMai</title>
+  <style>
+    :root {
+      --bg: #f7f7f7;
+      --hud: #1f1f1f;
+      --hint: #666;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      font-family: "Trebuchet MS", "Verdana", sans-serif;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+    }
+    #wrap {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at 50% 20%, #ffffff 0%, #f2f2f2 45%, #ececec 100%);
+    }
+    canvas {
+      display: block;
+      background: #ffffff;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.08);
+      border-radius: 16px;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      color: var(--hud);
+      padding: 16px;
+      box-sizing: border-box;
+      font-size: 14px;
+    }
+    #hud {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      font-weight: 600;
+    }
+    #hint {
+      margin-top: 6px;
+      color: var(--hint);
+      font-weight: 500;
+    }
+    #gameover {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      text-align: center;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    #gameover .card {
+      background: #111;
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 20px 24px;
+      border-radius: 14px;
+      max-width: 320px;
+      width: 100%;
+    }
+    #gameover h1 {
+      font-size: 22px;
+      margin: 0 0 10px;
+    }
+    #gameover p {
+      margin: 6px 0;
+      font-size: 16px;
+    }
+    #restart {
+      margin-top: 12px;
+      padding: 10px 14px;
+      font-size: 15px;
+      border-radius: 10px;
+      border: none;
+      background: #f7c948;
+      color: #111;
+      font-weight: 700;
+      pointer-events: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="game"></canvas>
+  </div>
+  <div id="overlay">
+    <div id="hud">
+      <div id="score">Score: 0</div>
+      <div id="time">Time: 0.0s</div>
+      <div id="phase">Phase: 1</div>
+    </div>
+    <div id="hint">Drag anywhere to move MXW. Avoid ASALA soldiers.</div>
+  </div>
+  <div id="gameover">
+    <div class="card">
+      <h1>Game Over</h1>
+      <p id="final-score"></p>
+      <p id="final-time"></p>
+      <button id="restart">Play Again</button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const scoreEl = document.getElementById('score');
+    const timeEl = document.getElementById('time');
+    const phaseEl = document.getElementById('phase');
+    const gameOverEl = document.getElementById('gameover');
+    const finalScoreEl = document.getElementById('final-score');
+    const finalTimeEl = document.getElementById('final-time');
+    const restartBtn = document.getElementById('restart');
+
+    const world = {
+      width: 9,
+      height: 16,
+      radius: 0.45,
+      mxwSpeed: 10,
+      aslSpeed: 5
+    };
+
+    const state = {
+      running: true,
+      score: 0,
+      scoreTimer: 0,
+      time: 0,
+      timeTicker: 0,
+      phase: 1,
+      nextPhaseAt: 10,
+      scale: 1,
+      dpr: 1,
+      mxw: { x: world.width / 2, y: world.height / 2, vx: 0, vy: 0 },
+      asls: [],
+      joystick: {
+        active: false,
+        startX: 0,
+        startY: 0,
+        dx: 0,
+        dy: 0,
+        max: 60
+      }
+    };
+
+    const mxwImg = new Image();
+    mxwImg.src = 'mxw.png';
+    const aslImg = new Image();
+    aslImg.src = 'asl.png';
+
+    function resetGame() {
+      state.running = true;
+      state.score = 0;
+      state.scoreTimer = 0;
+      state.time = 0;
+      state.timeTicker = 0;
+      state.phase = 1;
+      state.nextPhaseAt = 10;
+      state.mxw = { x: world.width / 2, y: world.height / 2, vx: 0, vy: 0 };
+      state.asls = [spawnAsl()];
+      scoreEl.textContent = 'Score: 0';
+      timeEl.textContent = 'Time: 0.0s';
+      phaseEl.textContent = 'Phase: 1';
+      gameOverEl.style.display = 'none';
+    }
+
+    function spawnAsl() {
+      return {
+        x: world.width / 2,
+        y: world.radius,
+        vx: 0,
+        vy: 0
+      };
+    }
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const scale = Math.min(vw / world.width, vh / world.height);
+      state.scale = scale;
+      state.dpr = dpr;
+      canvas.style.width = `${world.width * scale}px`;
+      canvas.style.height = `${world.height * scale}px`;
+      canvas.width = Math.floor(world.width * scale * dpr);
+      canvas.height = Math.floor(world.height * scale * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function clamp(val, min, max) {
+      return Math.max(min, Math.min(max, val));
+    }
+
+    function length(x, y) {
+      return Math.hypot(x, y);
+    }
+
+    function update(dt) {
+      if (!state.running) return;
+
+      state.time += dt;
+      state.timeTicker += dt;
+      if (state.timeTicker >= 0.1) {
+        state.timeTicker = 0;
+        timeEl.textContent = `Time: ${state.time.toFixed(1)}s`;
+      }
+
+      state.scoreTimer += dt;
+      if (state.scoreTimer >= 0.5) {
+        state.scoreTimer = 0;
+        state.score += 1;
+        scoreEl.textContent = `Score: ${state.score}`;
+      }
+
+      if (state.time >= state.nextPhaseAt) {
+        state.phase += 1;
+        state.nextPhaseAt += 10;
+        state.asls.push(spawnAsl());
+        phaseEl.textContent = `Phase: ${state.phase}`;
+      }
+
+      const joy = state.joystick;
+      let joyMag = length(joy.dx, joy.dy);
+      if (!joy.active) joyMag = 0;
+      let dirX = joyMag ? joy.dx / joyMag : 0;
+      let dirY = joyMag ? joy.dy / joyMag : 0;
+      const speed = world.mxwSpeed * Math.min(joyMag / joy.max, 1);
+
+      state.mxw.vx = dirX * speed;
+      state.mxw.vy = dirY * speed;
+
+      state.mxw.x += state.mxw.vx * dt;
+      state.mxw.y += state.mxw.vy * dt;
+      keepInBounds(state.mxw);
+
+      const repulseStrength = 18;
+      for (let i = 0; i < state.asls.length; i++) {
+        const asl = state.asls[i];
+        let tx = state.mxw.x - asl.x;
+        let ty = state.mxw.y - asl.y;
+        let dist = length(tx, ty) || 0.0001;
+        let vx = (tx / dist) * world.aslSpeed;
+        let vy = (ty / dist) * world.aslSpeed;
+
+        for (let j = 0; j < state.asls.length; j++) {
+          if (i === j) continue;
+          const other = state.asls[j];
+          const ox = asl.x - other.x;
+          const oy = asl.y - other.y;
+          const d = length(ox, oy);
+          const minDist = world.radius * 2.05;
+          if (d > 0 && d < minDist) {
+            const push = (minDist - d) / minDist;
+            vx += (ox / d) * repulseStrength * push;
+            vy += (oy / d) * repulseStrength * push;
+          }
+        }
+
+        const vLen = length(vx, vy) || 0.0001;
+        vx = (vx / vLen) * world.aslSpeed;
+        vy = (vy / vLen) * world.aslSpeed;
+
+        asl.vx = vx;
+        asl.vy = vy;
+        asl.x += asl.vx * dt;
+        asl.y += asl.vy * dt;
+        keepInBounds(asl);
+      }
+
+      if (checkCollision()) {
+        endGame();
+      }
+    }
+
+    function keepInBounds(entity) {
+      const r = world.radius;
+      entity.x = clamp(entity.x, r, world.width - r);
+      entity.y = clamp(entity.y, r, world.height - r);
+    }
+
+    function checkCollision() {
+      for (const asl of state.asls) {
+        const dx = asl.x - state.mxw.x;
+        const dy = asl.y - state.mxw.y;
+        const d = length(dx, dy);
+        if (d < world.radius * 2) return true;
+      }
+      return false;
+    }
+
+    function endGame() {
+      state.running = false;
+      finalScoreEl.textContent = `Final Score: ${state.score}`;
+      finalTimeEl.textContent = `Surviving Time: ${state.time.toFixed(1)}s`;
+      gameOverEl.style.display = 'grid';
+    }
+
+    function draw() {
+      ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+      ctx.clearRect(0, 0, canvas.width / state.dpr, canvas.height / state.dpr);
+
+      ctx.save();
+      ctx.scale(state.scale, state.scale);
+
+      drawEntity(state.mxw, mxwImg);
+      for (const asl of state.asls) {
+        drawEntity(asl, aslImg);
+      }
+
+      drawJoystick();
+      ctx.restore();
+
+      requestAnimationFrame(draw);
+    }
+
+    function drawEntity(entity, image) {
+      const r = world.radius;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(entity.x, entity.y, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      if (image.complete && image.naturalWidth) {
+        ctx.drawImage(image, entity.x - r, entity.y - r, r * 2, r * 2);
+      } else {
+        ctx.fillStyle = '#bbb';
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.lineWidth = 0.04;
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      ctx.beginPath();
+      ctx.arc(entity.x, entity.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    function drawJoystick() {
+      const joy = state.joystick;
+      if (!joy.active) return;
+      const baseX = joy.startX / state.scale;
+      const baseY = joy.startY / state.scale;
+      const knobX = (joy.startX + joy.dx) / state.scale;
+      const knobY = (joy.startY + joy.dy) / state.scale;
+      const baseR = joy.max / state.scale;
+
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 0.06;
+      ctx.strokeStyle = '#333';
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.beginPath();
+      ctx.arc(baseX, baseY, baseR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.beginPath();
+      ctx.arc(knobX, knobY, baseR * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function onPointerDown(e) {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      state.joystick.active = true;
+      state.joystick.startX = x;
+      state.joystick.startY = y;
+      state.joystick.dx = 0;
+      state.joystick.dy = 0;
+    }
+
+    function onPointerMove(e) {
+      if (!state.joystick.active) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      let dx = x - state.joystick.startX;
+      let dy = y - state.joystick.startY;
+      const dist = length(dx, dy);
+      if (dist > state.joystick.max) {
+        dx = (dx / dist) * state.joystick.max;
+        dy = (dy / dist) * state.joystick.max;
+      }
+      state.joystick.dx = dx;
+      state.joystick.dy = dy;
+    }
+
+    function onPointerUp() {
+      state.joystick.active = false;
+      state.joystick.dx = 0;
+      state.joystick.dy = 0;
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      update(dt);
+      requestAnimationFrame(loop);
+    }
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointercancel', onPointerUp);
+    window.addEventListener('resize', resize);
+    restartBtn.addEventListener('click', () => {
+      resetGame();
+    });
+
+    resize();
+    resetGame();
+    requestAnimationFrame(loop);
+    requestAnimationFrame(draw);
+  </script>
+</body>
+</html>
